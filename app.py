@@ -15,19 +15,27 @@ os.makedirs(Config.CERTIFICATE_FOLDER, exist_ok=True)
 # Load student data
 try:
     student_data = pd.read_excel("student_data.xlsx")
-    # Ensure the Student ID column exists
-    if 'Student ID' not in student_data.columns or 'Name' not in student_data.columns:
-        raise ValueError("Excel file must contain 'Student ID' and 'Name' columns")
+    # Ensure required columns exist
+    required_columns = ['Moodle ID', 'Name', 'Event Name']
+    if not all(col in student_data.columns for col in required_columns):
+        raise ValueError("Excel file must contain 'Moodle ID', 'Name', and 'Event Name' columns")
 except FileNotFoundError:
-    student_data = pd.DataFrame(columns=["Student ID", "Name"])
+    student_data = pd.DataFrame(columns=["Moodle ID", "Name", "Event Name"])
 except ValueError as e:
     app.logger.error(f"Excel file error: {e}")
-    student_data = pd.DataFrame(columns=["Student ID", "Name"])
+    student_data = pd.DataFrame(columns=["Moodle ID", "Name", "Event Name"])
 
 def validate_student_id(student_id):
     """Validate student ID format (assuming numeric ID)."""
     app.logger.debug(f"Validating student ID: {student_id}")
     is_valid = bool(re.match("^[0-9]+$", student_id))
+    app.logger.debug(f"Is valid: {is_valid}")
+    return is_valid
+
+def validate_moodle_id(moodle_id):
+    """Validate Moodle ID format (assuming numeric ID)."""
+    app.logger.debug(f"Validating Moodle ID: {moodle_id}")
+    is_valid = bool(re.match("^[0-9]+$", moodle_id))
     app.logger.debug(f"Is valid: {is_valid}")
     return is_valid
 
@@ -37,32 +45,64 @@ def get_student_name(student_id):
         # Convert student_id to integer for comparison
         student_id = int(student_id)
         app.logger.debug(f"Looking up student ID: {student_id}")
-        app.logger.debug(f"Available IDs: {student_data['Student ID'].values}")
-        student = student_data[student_data['Student ID'] == student_id].iloc[0]
+        app.logger.debug(f"Available IDs: {student_data['Moodle ID'].values}")
+        student = student_data[student_data['Moodle ID'] == student_id].iloc[0]
         return student['Name']
     except (IndexError, KeyError, ValueError) as e:
         app.logger.error(f"Error getting student name: {e}")
         return None
 
+def get_student_name(moodle_id):
+    """Get student name from Moodle ID."""
+    try:
+        # Convert moodle_id to integer for comparison
+        moodle_id = int(moodle_id)
+        app.logger.debug(f"Looking up Moodle ID: {moodle_id}")
+        app.logger.debug(f"Available IDs: {student_data['Moodle ID'].values}")
+        student = student_data[student_data['Moodle ID'] == moodle_id].iloc[0]
+        return student['Name']
+    except (IndexError, KeyError, ValueError) as e:
+        app.logger.error(f"Error getting student name: {e}")
+        return None
+
+def get_student_info(moodle_id):
+    """Get student name and event from Moodle ID."""
+    try:
+        moodle_id = int(moodle_id)
+        app.logger.debug(f"Looking up Moodle ID: {moodle_id}")
+        student = student_data[student_data['Moodle ID'] == moodle_id].iloc[0]
+        return student['Name'], student['Event Name']
+    except (IndexError, KeyError, ValueError) as e:
+        app.logger.error(f"Error getting student info: {e}")
+        return None, None
+
 def validate_name(name):
     """Validate student name."""
     return bool(re.match("^[a-zA-Z ]+$", name))
 
-def generate_certificate(name):
-    """Generate certificate for a given name."""
-    cert_path = os.path.join(Config.CERTIFICATE_FOLDER, f"{secure_filename(name)}_certificate.png")
+def generate_certificate(name, event):
+    """Generate certificate for a given name and event."""
+    cert_path = os.path.join(Config.CERTIFICATE_FOLDER, f"{secure_filename(name)}_{secure_filename(event)}_certificate.png")
     
     if os.path.exists(cert_path):
         return cert_path
 
     try:
-        if not os.path.exists(Config.TEMPLATE_PATH):
-            raise FileNotFoundError(f"Certificate template not found at {Config.TEMPLATE_PATH}")
+        # Select template based on event
+        if event.lower() == "aiml bootcamp":
+            template_path = os.path.join("templates", "aiml_template.png")
+        elif event.lower() == "dsa bootcamp":
+            template_path = os.path.join("templates", "dsa_template.png")
+        else:
+            raise ValueError(f"Invalid event: {event}")
+
+        if not os.path.exists(template_path):
+            raise FileNotFoundError(f"Certificate template not found at {template_path}")
         if not os.path.exists(Config.FONT_PATH):
             raise FileNotFoundError(f"Font file not found at {Config.FONT_PATH}")
 
         # Load certificate template
-        image = Image.open(Config.TEMPLATE_PATH)
+        image = Image.open(template_path)
         draw = ImageDraw.Draw(image)
         
         # Load font
@@ -100,14 +140,14 @@ def index():
 
 @app.route("/download", methods=["POST"])
 def download():
-    student_id = request.form.get("student_id", "").strip()
+    moodle_id = request.form.get("moodle_id", "").strip()
     
-    if not student_id or not validate_student_id(student_id):
-        return "Invalid student ID provided", 400
+    if not moodle_id or not validate_moodle_id(moodle_id):
+        return "Invalid Moodle ID provided", 400
     
-    student_name = get_student_name(student_id)
-    if student_name:
-        cert_path = generate_certificate(student_name)
+    student_name, event_name = get_student_info(moodle_id)
+    if student_name and event_name:
+        cert_path = generate_certificate(student_name, event_name)
         if cert_path:
             try:
                 return send_file(cert_path, as_attachment=True)
@@ -117,7 +157,7 @@ def download():
         else:
             return "Error generating certificate. Please try again.", 500
     else:
-        return "Student ID not found. Please check your ID and try again.", 404
+        return "Moodle ID not found or no event associated. Please check your ID and try again.", 404
 
 if __name__ == "__main__":
     app.run(debug=True)
